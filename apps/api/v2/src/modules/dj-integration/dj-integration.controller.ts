@@ -46,6 +46,40 @@ class BusyTimesDto {
   @IsString()
   timeZone!: string;
 }
+class CreateDjBookingDto {
+  @IsString()
+  externalUserId!: string;
+
+  @IsString()
+  appointmentId!: string;
+
+  @IsString()
+  meetingNumber!: string;
+
+  @IsString()
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string | null;
+
+  @IsString()
+  start!: string;
+
+  @IsString()
+  end!: string;
+
+  @IsString()
+  timeZone!: string;
+
+  @IsString()
+  meetingMode!: string;
+
+  attendee!: {
+    name: string;
+    email: string;
+  };
+}
 @Controller("dj-integration")
 @UseGuards(DjIntegrationGuard)
 export class DjIntegrationController {
@@ -85,5 +119,9 @@ async connectMicrosoft(@Body() body: MicrosoftConnectDto) {
 @Post("calendar/busy-times")
 async getBusyTimes(@Body() body: BusyTimesDto) {
   return this.djIntegrationService.getBusyTimes(body);
+}
+@Post("calendar/book")
+async createBooking(@Body() body: CreateDjBookingDto) {
+  return this.djIntegrationService.createBooking(body);
 }
 }

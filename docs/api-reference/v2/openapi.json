@@ -16460,6 +16460,10 @@
       "BusyTimesDto": {
         "type": "object",
         "properties": {}
+      },
+      "CreateDjBookingDto": {
+        "type": "object",
+        "properties": {}
       }
     }
   }

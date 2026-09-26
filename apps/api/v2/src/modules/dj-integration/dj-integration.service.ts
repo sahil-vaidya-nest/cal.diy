@@ -660,4 +660,259 @@ console.log("OUTLOOK BUSY TIMES:", busyTimes);
     data: busyTimes,
   };
 }
+async createBooking(input: {
+  externalUserId: string;
+  appointmentId: string;
+  meetingNumber: string;
+  title: string;
+  description?: string | null;
+  start: string;
+  end: string;
+  timeZone: string;
+  meetingMode: string;
+  attendee: {
+    name: string;
+    email: string;
+  };
+}) {
+  const userId = Number(input.externalUserId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new BadRequestException("Invalid Cal.diy user mapping.");
+  }
+
+  // =====================================================
+  // 1. GET ADVISOR MICROSOFT CALENDAR CREDENTIAL
+  // =====================================================
+
+  const credential =
+    await this.dbWrite.prisma.credential.findFirst({
+      where: {
+        userId,
+        type: "office365_calendar",
+        appId: "office365-calendar",
+      },
+      orderBy: {
+        id: "desc",
+      },
+      select: {
+        id: true,
+        key: true,
+      },
+    });
+
+  if (!credential) {
+    throw new BadRequestException(
+      "Advisor Outlook calendar credential not found."
+    );
+  }
+
+  const key = credential.key as Record<string, any>;
+
+  if (typeof key?.access_token !== "string") {
+    throw new BadRequestException(
+      "Advisor Outlook access token not found."
+    );
+  }
+
+  let accessToken: string = key.access_token;
+
+  // =====================================================
+  // 2. MICROSOFT GRAPH BOOKING
+  // =====================================================
+
+  const callGraph = (token: string) => {
+    const isOnline = input.meetingMode === "ONLINE";
+
+    return fetch(
+      "https://graph.microsoft.com/v1.0/me/events",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: input.title,
+
+          body: {
+            contentType: "text",
+            content: input.description ?? "",
+          },
+
+          start: {
+            dateTime: input.start,
+            timeZone: "UTC",
+          },
+
+          end: {
+            dateTime: input.end,
+            timeZone: "UTC",
+          },
+
+          attendees: [
+            {
+              emailAddress: {
+                address: input.attendee.email,
+                name: input.attendee.name,
+              },
+              type: "required",
+            },
+          ],
+
+          showAs: "busy",
+
+          isOnlineMeeting: isOnline,
+
+          ...(isOnline
+            ? {
+                onlineMeetingProvider: "teamsForBusiness",
+              }
+            : {}),
+
+          transactionId: input.appointmentId,
+        }),
+      }
+    );
+  };
+
+  // =====================================================
+  // 3. FIRST ATTEMPT
+  // =====================================================
+
+  let response = await callGraph(accessToken);
+
+  // =====================================================
+  // 4. TOKEN EXPIRED -> REFRESH -> RETRY ONCE
+  // =====================================================
+
+  if (response.status === 401) {
+    if (typeof key.refresh_token !== "string") {
+      throw new BadRequestException(
+        "Microsoft session expired. Please reconnect Outlook."
+      );
+    }
+
+    const app = await this.dbWrite.prisma.app.findUnique({
+      where: {
+        slug: "msteams",
+      },
+      select: {
+        keys: true,
+      },
+    });
+
+    const appKeys =
+      app?.keys as Record<string, any> | undefined;
+
+    if (
+      typeof appKeys?.client_id !== "string" ||
+      typeof appKeys?.client_secret !== "string"
+    ) {
+      throw new BadRequestException(
+        "Microsoft app credentials are not configured."
+      );
+    }
+
+    const tokenResponse = await fetch(
+      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          client_id: appKeys.client_id,
+          client_secret: appKeys.client_secret,
+          grant_type: "refresh_token",
+          refresh_token: key.refresh_token,
+          scope:
+            "openid profile email User.Read Calendars.Read Calendars.ReadWrite OnlineMeetings.ReadWrite offline_access",
+        }),
+      }
+    );
+
+    const tokenData = await tokenResponse.json();
+
+    if (
+      !tokenResponse.ok ||
+      typeof tokenData?.access_token !== "string"
+    ) {
+      throw new BadRequestException(
+        "Microsoft session expired. Please reconnect Outlook."
+      );
+    }
+
+    const newAccessToken: string =
+      tokenData.access_token;
+
+    accessToken = newAccessToken;
+
+    await this.dbWrite.prisma.credential.update({
+      where: {
+        id: credential.id,
+      },
+      data: {
+        key: {
+          ...key,
+          ...tokenData,
+
+          access_token: newAccessToken,
+
+          refresh_token:
+            typeof tokenData.refresh_token === "string"
+              ? tokenData.refresh_token
+              : key.refresh_token,
+
+          expiry_date:
+            Date.now() +
+            (typeof tokenData.expires_in === "number"
+              ? tokenData.expires_in
+              : 3600) *
+              1000,
+        },
+      },
+    });
+
+    response = await callGraph(newAccessToken);
+  }
+
+  // =====================================================
+  // 5. PROCESS CREATED OUTLOOK EVENT
+  // =====================================================
+
+  const event = await response.json();
+
+  if (!response.ok) {
+    console.error(
+      "MICROSOFT GRAPH BOOKING ERROR:",
+      response.status,
+      event
+    );
+
+    throw new BadRequestException(
+      "Unable to create advisor Outlook meeting."
+    );
+  }
+
+  // =====================================================
+  // 6. RETURN SAFE BOOKING RESULT
+  // =====================================================
+
+  return {
+    data: {
+      externalBookingId: event.id,
+      externalEventId: event.id,
+
+      meetingLink:
+        event.onlineMeeting?.joinUrl ??
+        event.onlineMeetingUrl ??
+        null,
+
+      start: input.start,
+      end: input.end,
+    },
+  };
+}
 }
