@@ -9,6 +9,7 @@ import { StripeModule } from "@/modules/stripe/stripe.module";
 import { TimezoneModule } from "@/modules/timezones/timezones.module";
 import { VerifiedResourcesModule } from "@/modules/verified-resources/verified-resources.module";
 import type { MiddlewareConsumer, NestModule } from "@nestjs/common";
+import { DjIntegrationModule } from "@/modules/dj-integration/dj-integration.module";
 import { Module } from "@nestjs/common";
 
 import { UsersModule } from "./users/users.module";
@@ -28,6 +29,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     ConferencingModule,
     CalUnifiedCalendarsModule,
     VerifiedResourcesModule,
+    DjIntegrationModule
   ],
 })
 export class EndpointsModule implements NestModule {

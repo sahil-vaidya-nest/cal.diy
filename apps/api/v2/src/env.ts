@@ -1,5 +1,14 @@
 import { logLevels } from "@/lib/logger";
 
+import dotenv from "dotenv";
+
+const result = dotenv.config({
+  path: "C:/Users/India/CAL_DIY_POC/cal.diy/.env",
+});
+
+if (result.error) {
+  throw new Error("Failed to load Cal.diy root .env");
+}
 export type Environment = {
   NODE_ENV: "development" | "production";
   API_PORT: string;
@@ -45,7 +54,10 @@ export type Environment = {
   ENABLE_ASYNC_TASKER: string;
 };
 
-export const getEnv = <K extends keyof Environment>(key: K, fallback?: Environment[K]): Environment[K] => {
+export const getEnv = <K extends keyof Environment>(
+  key: K,
+  fallback?: Environment[K]
+): Environment[K] => {
   const value = process.env[key] as Environment[K] | undefined;
 
   if (value === undefined) {

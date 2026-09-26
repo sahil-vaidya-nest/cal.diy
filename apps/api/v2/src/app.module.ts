@@ -23,6 +23,7 @@ import { PrismaModule } from "@/modules/prisma/prisma.module";
 import { RedisModule } from "@/modules/redis/redis.module";
 import { RedisService } from "@/modules/redis/redis.service";
 import { VercelWebhookController } from "@/vercel-webhook.controller";
+import { DjIntegrationModule } from "@/modules/dj-integration/dj-integration.module";
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { VercelWebhookController } from "@/vercel-webhook.controller";
     EndpointsModule,
     AuthModule,
     JwtModule,
+    DjIntegrationModule
   ],
   controllers: [AppController, VercelWebhookController],
   providers: [
