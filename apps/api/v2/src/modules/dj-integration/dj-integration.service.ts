@@ -675,6 +675,16 @@ async createBooking(input: {
     email: string;
   };
 }) {
+  console.log("DJ BOOKING INPUT:", JSON.stringify(input, null, 2));
+  if (
+  !input.attendee ||
+  !input.attendee.email ||
+  !input.attendee.name
+) {
+  throw new BadRequestException(
+    "Meeting attendee name and email are required."
+  );
+}
   const userId = Number(input.externalUserId);
 
   if (!Number.isInteger(userId) || userId <= 0) {
