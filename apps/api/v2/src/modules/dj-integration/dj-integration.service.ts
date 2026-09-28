@@ -686,9 +686,314 @@ async createBooking(input: {
   );
 }
   const userId = Number(input.externalUserId);
-
+ 
   if (!Number.isInteger(userId) || userId <= 0) {
     throw new BadRequestException("Invalid Cal.diy user mapping.");
+  }
+ 
+  // =====================================================
+  // 1. GET ADVISOR MICROSOFT CALENDAR CREDENTIAL
+  // =====================================================
+ 
+  const credential =
+    await this.dbWrite.prisma.credential.findFirst({
+      where: {
+        userId,
+        type: "office365_calendar",
+        appId: "office365-calendar",
+      },
+      orderBy: {
+        id: "desc",
+      },
+      select: {
+        id: true,
+        key: true,
+      },
+    });
+ 
+  if (!credential) {
+    throw new BadRequestException(
+      "Advisor Outlook calendar credential not found."
+    );
+  }
+ 
+  const key = credential.key as Record<string, any>;
+ 
+  if (typeof key?.access_token !== "string") {
+    throw new BadRequestException(
+      "Advisor Outlook access token not found."
+    );
+  }
+ 
+  let accessToken: string = key.access_token;
+const toLocalDateTime = (
+  value: string,
+  timeZone: string
+): string => {
+  const date = new Date(value);
+ 
+  if (Number.isNaN(date.getTime())) {
+    throw new BadRequestException(
+      "Invalid meeting date/time."
+    );
+  }
+ 
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+ 
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value;
+ 
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
+};
+ 
+const graphStart = toLocalDateTime(
+  input.start,
+  input.timeZone
+);
+ 
+const graphEnd = toLocalDateTime(
+  input.end,
+  input.timeZone
+);
+  // =====================================================
+  // 2. MICROSOFT GRAPH BOOKING
+  // =====================================================
+ 
+  const callGraph = (token: string) => {
+    const isOnline = input.meetingMode === "ONLINE";
+ 
+    return fetch(
+      "https://graph.microsoft.com/v1.0/me/events",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: input.title,
+ 
+          body: {
+            contentType: "text",
+            content: input.description ?? "",
+          },
+ 
+         start: {
+  dateTime: graphStart,
+  timeZone: input.timeZone,
+},
+ 
+end: {
+  dateTime: graphEnd,
+  timeZone: input.timeZone,
+},
+ 
+          attendees: [
+            {
+              emailAddress: {
+                address: input.attendee.email,
+                name: input.attendee.name,
+              },
+              type: "required",
+            },
+          ],
+ 
+          showAs: "busy",
+ 
+          isOnlineMeeting: isOnline,
+ 
+          ...(isOnline
+            ? {
+                onlineMeetingProvider: "teamsForBusiness",
+              }
+            : {}),
+ 
+          transactionId: input.appointmentId,
+        }),
+      }
+    );
+  };
+ 
+  // =====================================================
+  // 3. FIRST ATTEMPT
+  // =====================================================
+ 
+  let response = await callGraph(accessToken);
+ 
+  // =====================================================
+  // 4. TOKEN EXPIRED -> REFRESH -> RETRY ONCE
+  // =====================================================
+ 
+  if (response.status === 401) {
+    if (typeof key.refresh_token !== "string") {
+      throw new BadRequestException(
+        "Microsoft session expired. Please reconnect Outlook."
+      );
+    }
+ 
+    const app = await this.dbWrite.prisma.app.findUnique({
+      where: {
+        slug: "msteams",
+      },
+      select: {
+        keys: true,
+      },
+    });
+ 
+    const appKeys =
+      app?.keys as Record<string, any> | undefined;
+ 
+    if (
+      typeof appKeys?.client_id !== "string" ||
+      typeof appKeys?.client_secret !== "string"
+    ) {
+      throw new BadRequestException(
+        "Microsoft app credentials are not configured."
+      );
+    }
+ 
+    const tokenResponse = await fetch(
+      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          client_id: appKeys.client_id,
+          client_secret: appKeys.client_secret,
+          grant_type: "refresh_token",
+          refresh_token: key.refresh_token,
+          scope:
+            "openid profile email User.Read Calendars.Read Calendars.ReadWrite OnlineMeetings.ReadWrite offline_access",
+        }),
+      }
+    );
+ 
+    const tokenData = await tokenResponse.json();
+ 
+    if (
+      !tokenResponse.ok ||
+      typeof tokenData?.access_token !== "string"
+    ) {
+      throw new BadRequestException(
+        "Microsoft session expired. Please reconnect Outlook."
+      );
+    }
+ 
+    const newAccessToken: string =
+      tokenData.access_token;
+ 
+    accessToken = newAccessToken;
+ 
+    await this.dbWrite.prisma.credential.update({
+      where: {
+        id: credential.id,
+      },
+      data: {
+        key: {
+          ...key,
+          ...tokenData,
+ 
+          access_token: newAccessToken,
+ 
+          refresh_token:
+            typeof tokenData.refresh_token === "string"
+              ? tokenData.refresh_token
+              : key.refresh_token,
+ 
+          expiry_date:
+            Date.now() +
+            (typeof tokenData.expires_in === "number"
+              ? tokenData.expires_in
+              : 3600) *
+              1000,
+        },
+      },
+    });
+ 
+    response = await callGraph(newAccessToken);
+  }
+ 
+  // =====================================================
+  // 5. PROCESS CREATED OUTLOOK EVENT
+  // =====================================================
+ 
+  const event = await response.json();
+ 
+  if (!response.ok) {
+    console.error(
+      "MICROSOFT GRAPH BOOKING ERROR:",
+      response.status,
+      event
+    );
+ 
+    throw new BadRequestException(
+      "Unable to create advisor Outlook meeting."
+    );
+  }
+ 
+  // =====================================================
+  // 6. RETURN SAFE BOOKING RESULT
+  // =====================================================
+  console.log(
+  "GRAPH CREATED EVENT TIME:",
+  JSON.stringify(
+    {
+      start: event.start,
+      end: event.end,
+      originalStartTimeZone: event.originalStartTimeZone,
+      originalEndTimeZone: event.originalEndTimeZone,
+    },
+    null,
+    2
+  )
+);
+  return {
+    data: {
+      externalBookingId: event.id,
+      externalEventId: event.id,
+ 
+      meetingLink:
+        event.onlineMeeting?.joinUrl ??
+        event.onlineMeetingUrl ??
+        null,
+ 
+      start: input.start,
+      end: input.end,
+    },
+  };
+ 
+}
+async rescheduleBooking(input: {
+  externalUserId: string;
+  externalEventId: string;
+  start: string;
+  end: string;
+  timeZone: string;
+}) {
+  const userId = Number(input.externalUserId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new BadRequestException(
+      "Invalid Cal.diy user mapping."
+    );
+  }
+
+  if (!input.externalEventId?.trim()) {
+    throw new BadRequestException(
+      "Outlook event ID is required."
+    );
   }
 
   // =====================================================
@@ -728,72 +1033,94 @@ async createBooking(input: {
   let accessToken: string = key.access_token;
 
   // =====================================================
-  // 2. MICROSOFT GRAPH BOOKING
+  // 2. CONVERT UTC INSTANT -> ADVISOR LOCAL DATETIME
+  // =====================================================
+
+  const toLocalDateTime = (
+    value: string,
+    timeZone: string
+  ): string => {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException(
+        "Invalid meeting date/time."
+      );
+    }
+
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+
+    const get = (
+      type: Intl.DateTimeFormatPartTypes
+    ) =>
+      parts.find((part) => part.type === type)?.value;
+
+    return `${get("year")}-${get("month")}-${get(
+      "day"
+    )}T${get("hour")}:${get("minute")}:${get(
+      "second"
+    )}`;
+  };
+
+  const graphStart = toLocalDateTime(
+    input.start,
+    input.timeZone
+  );
+
+  const graphEnd = toLocalDateTime(
+    input.end,
+    input.timeZone
+  );
+
+  // =====================================================
+  // 3. PATCH EXISTING OUTLOOK EVENT
   // =====================================================
 
   const callGraph = (token: string) => {
-    const isOnline = input.meetingMode === "ONLINE";
-
     return fetch(
-      "https://graph.microsoft.com/v1.0/me/events",
+      `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(
+        input.externalEventId
+      )}`,
       {
-        method: "POST",
+        method: "PATCH",
+
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
+
         body: JSON.stringify({
-          subject: input.title,
-
-          body: {
-            contentType: "text",
-            content: input.description ?? "",
-          },
-
           start: {
-            dateTime: input.start,
-            timeZone: "UTC",
+            dateTime: graphStart,
+            timeZone: input.timeZone,
           },
 
           end: {
-            dateTime: input.end,
-            timeZone: "UTC",
+            dateTime: graphEnd,
+            timeZone: input.timeZone,
           },
-
-          attendees: [
-            {
-              emailAddress: {
-                address: input.attendee.email,
-                name: input.attendee.name,
-              },
-              type: "required",
-            },
-          ],
-
-          showAs: "busy",
-
-          isOnlineMeeting: isOnline,
-
-          ...(isOnline
-            ? {
-                onlineMeetingProvider: "teamsForBusiness",
-              }
-            : {}),
-
-          transactionId: input.appointmentId,
         }),
       }
     );
   };
 
   // =====================================================
-  // 3. FIRST ATTEMPT
+  // 4. FIRST ATTEMPT
   // =====================================================
 
   let response = await callGraph(accessToken);
 
   // =====================================================
-  // 4. TOKEN EXPIRED -> REFRESH -> RETRY ONCE
+  // 5. TOKEN EXPIRED -> REFRESH -> RETRY ONCE
   // =====================================================
 
   if (response.status === 401) {
@@ -803,14 +1130,15 @@ async createBooking(input: {
       );
     }
 
-    const app = await this.dbWrite.prisma.app.findUnique({
-      where: {
-        slug: "msteams",
-      },
-      select: {
-        keys: true,
-      },
-    });
+    const app =
+      await this.dbWrite.prisma.app.findUnique({
+        where: {
+          slug: "msteams",
+        },
+        select: {
+          keys: true,
+        },
+      });
 
     const appKeys =
       app?.keys as Record<string, any> | undefined;
@@ -828,15 +1156,19 @@ async createBooking(input: {
       "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       {
         method: "POST",
+
         headers: {
           "Content-Type":
             "application/x-www-form-urlencoded",
         },
+
         body: new URLSearchParams({
           client_id: appKeys.client_id,
           client_secret: appKeys.client_secret,
+
           grant_type: "refresh_token",
           refresh_token: key.refresh_token,
+
           scope:
             "openid profile email User.Read Calendars.Read Calendars.ReadWrite OnlineMeetings.ReadWrite offline_access",
         }),
@@ -863,6 +1195,7 @@ async createBooking(input: {
       where: {
         id: credential.id,
       },
+
       data: {
         key: {
           ...key,
@@ -889,39 +1222,293 @@ async createBooking(input: {
   }
 
   // =====================================================
-  // 5. PROCESS CREATED OUTLOOK EVENT
+  // 6. PROCESS GRAPH RESPONSE
   // =====================================================
 
-  const event = await response.json();
+  let event: any = null;
+
+  const responseText = await response.text();
+
+  if (responseText) {
+    try {
+      event = JSON.parse(responseText);
+    } catch {
+      event = null;
+    }
+  }
 
   if (!response.ok) {
     console.error(
-      "MICROSOFT GRAPH BOOKING ERROR:",
+      "MICROSOFT GRAPH RESCHEDULE ERROR:",
       response.status,
       event
     );
 
+    if (response.status === 404) {
+      throw new BadRequestException(
+        "Outlook meeting could not be found."
+      );
+    }
+
     throw new BadRequestException(
-      "Unable to create advisor Outlook meeting."
+      "Unable to reschedule advisor Outlook meeting."
     );
   }
 
   // =====================================================
-  // 6. RETURN SAFE BOOKING RESULT
+  // 7. RETURN SAFE RESULT
   // =====================================================
 
   return {
     data: {
-      externalBookingId: event.id,
-      externalEventId: event.id,
+      externalEventId: input.externalEventId,
 
       meetingLink:
-        event.onlineMeeting?.joinUrl ??
-        event.onlineMeetingUrl ??
+        event?.onlineMeeting?.joinUrl ??
+        event?.onlineMeetingUrl ??
         null,
 
       start: input.start,
       end: input.end,
+    },
+  };
+}
+
+async cancelBooking(input: {
+  externalUserId: string;
+  externalEventId: string;
+  reason?: string;
+}) {
+  const userId = Number(input.externalUserId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new BadRequestException(
+      "Invalid Cal.diy user mapping."
+    );
+  }
+
+  if (!input.externalEventId?.trim()) {
+    throw new BadRequestException(
+      "Outlook event ID is required."
+    );
+  }
+
+  // =====================================================
+  // 1. GET ADVISOR MICROSOFT CALENDAR CREDENTIAL
+  // =====================================================
+
+  const credential =
+    await this.dbWrite.prisma.credential.findFirst({
+      where: {
+        userId,
+        type: "office365_calendar",
+        appId: "office365-calendar",
+      },
+      orderBy: {
+        id: "desc",
+      },
+      select: {
+        id: true,
+        key: true,
+      },
+    });
+
+  if (!credential) {
+    throw new BadRequestException(
+      "Advisor Outlook calendar credential not found."
+    );
+  }
+
+  const key = credential.key as Record<string, any>;
+
+  if (typeof key?.access_token !== "string") {
+    throw new BadRequestException(
+      "Advisor Outlook access token not found."
+    );
+  }
+
+  let accessToken: string = key.access_token;
+
+  // =====================================================
+  // 2. CANCEL EXISTING OUTLOOK EVENT
+  // =====================================================
+
+  const callGraph = (token: string) => {
+    return fetch(
+      `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(
+        input.externalEventId
+      )}/cancel`,
+      {
+        method: "POST",
+
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+
+        body: JSON.stringify({
+          comment:
+            input.reason?.trim() ||
+            "Meeting cancelled.",
+        }),
+      }
+    );
+  };
+
+  // =====================================================
+  // 3. FIRST ATTEMPT
+  // =====================================================
+
+  let response = await callGraph(accessToken);
+
+  // =====================================================
+  // 4. TOKEN EXPIRED -> REFRESH -> RETRY ONCE
+  // =====================================================
+
+  if (response.status === 401) {
+    if (typeof key.refresh_token !== "string") {
+      throw new BadRequestException(
+        "Microsoft session expired. Please reconnect Outlook."
+      );
+    }
+
+    const app =
+      await this.dbWrite.prisma.app.findUnique({
+        where: {
+          slug: "msteams",
+        },
+        select: {
+          keys: true,
+        },
+      });
+
+    const appKeys =
+      app?.keys as Record<string, any> | undefined;
+
+    if (
+      typeof appKeys?.client_id !== "string" ||
+      typeof appKeys?.client_secret !== "string"
+    ) {
+      throw new BadRequestException(
+        "Microsoft app credentials are not configured."
+      );
+    }
+
+    const tokenResponse = await fetch(
+      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+        },
+
+        body: new URLSearchParams({
+          client_id: appKeys.client_id,
+          client_secret: appKeys.client_secret,
+
+          grant_type: "refresh_token",
+          refresh_token: key.refresh_token,
+
+          scope:
+            "openid profile email User.Read Calendars.Read Calendars.ReadWrite OnlineMeetings.ReadWrite offline_access",
+        }),
+      }
+    );
+
+    const tokenData = await tokenResponse.json();
+
+    if (
+      !tokenResponse.ok ||
+      typeof tokenData?.access_token !== "string"
+    ) {
+      throw new BadRequestException(
+        "Microsoft session expired. Please reconnect Outlook."
+      );
+    }
+
+    const newAccessToken: string =
+      tokenData.access_token;
+
+    accessToken = newAccessToken;
+
+    await this.dbWrite.prisma.credential.update({
+      where: {
+        id: credential.id,
+      },
+
+      data: {
+        key: {
+          ...key,
+          ...tokenData,
+
+          access_token: newAccessToken,
+
+          refresh_token:
+            typeof tokenData.refresh_token === "string"
+              ? tokenData.refresh_token
+              : key.refresh_token,
+
+          expiry_date:
+            Date.now() +
+            (typeof tokenData.expires_in === "number"
+              ? tokenData.expires_in
+              : 3600) *
+              1000,
+        },
+      },
+    });
+
+    response = await callGraph(newAccessToken);
+  }
+
+  // =====================================================
+  // 5. PROCESS GRAPH RESPONSE
+  // =====================================================
+
+  if (!response.ok) {
+    let errorData: any = null;
+
+    const responseText = await response.text();
+
+    if (responseText) {
+      try {
+        errorData = JSON.parse(responseText);
+      } catch {
+        errorData = null;
+      }
+    }
+
+    // Temporary while testing — remove sensitive Graph logs
+    // before production.
+    console.error(
+      "MICROSOFT GRAPH CANCEL ERROR:",
+      response.status,
+      errorData
+    );
+
+    if (response.status === 404) {
+      throw new BadRequestException(
+        "Outlook meeting could not be found."
+      );
+    }
+
+    throw new BadRequestException(
+      "Unable to cancel advisor Outlook meeting."
+    );
+  }
+
+  // Graph cancel normally returns 202 Accepted / empty body.
+
+  // =====================================================
+  // 6. RETURN SAFE RESULT
+  // =====================================================
+
+  return {
+    data: {
+      externalEventId: input.externalEventId,
+      cancelled: true,
     },
   };
 }

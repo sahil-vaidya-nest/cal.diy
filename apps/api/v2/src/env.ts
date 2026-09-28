@@ -1,13 +1,46 @@
 import { logLevels } from "@/lib/logger";
 
 import dotenv from "dotenv";
+import fs from "node:fs"
+import path from "node:path";
+// const result = dotenv.config({
+//   path: "C:/Users/India/CAL_DIY_POC/cal.diy/.env",
+// });
 
+// if (result.error) {
+//   throw new Error("Failed to load Cal.diy root .env");
+// }
+
+function findRootEnv(startDir: string): string {
+  let currentDir = startDir;
+ 
+  while (true) {
+    const envPath = path.join(currentDir, ".env");
+ 
+    if (fs.existsSync(envPath)) {
+      return envPath;
+    }
+ 
+    const parentDir = path.dirname(currentDir);
+ 
+    if (parentDir === currentDir) {
+      throw new Error(
+        `Unable to find Cal.diy root .env starting from: ${startDir}`
+      );
+    }
+ 
+    currentDir = parentDir;
+  }
+}
+ 
+const envPath = findRootEnv(process.cwd());
+ 
 const result = dotenv.config({
-  path: "C:/Users/India/CAL_DIY_POC/cal.diy/.env",
+  path: envPath,
 });
-
+ 
 if (result.error) {
-  throw new Error("Failed to load Cal.diy root .env");
+  throw new Error(`Failed to load Cal.diy root .env from: ${envPath}`);
 }
 export type Environment = {
   NODE_ENV: "development" | "production";
