@@ -16,9 +16,9 @@ import { RawBodyMiddleware } from "@/middleware/body/raw.body.middleware";
 import { UrlencodedBodyMiddleware } from "@/middleware/body/urlencoded.body.middleware";
 import { ResponseInterceptor } from "@/middleware/request-ids/request-id.interceptor";
 import { RequestIdMiddleware } from "@/middleware/request-ids/request-id.middleware";
-import { AuthModule } from "@/modules/auth/auth.module";
+// import { AuthModule } from "@/modules/auth/auth.module";
 // import { EndpointsModule } from "@/modules/endpoints.module";
-import { JwtModule } from "@/modules/jwt/jwt.module";
+// import { JwtModule } from "@/modules/jwt/jwt.module";
 import { PrismaModule } from "@/modules/prisma/prisma.module";
 import { RedisModule } from "@/modules/redis/redis.module";
 import { RedisService } from "@/modules/redis/redis.service";
@@ -58,8 +58,8 @@ import { DjIntegrationModule } from "@/modules/dj-integration/dj-integration.mod
     }),
     PrismaModule,
     // EndpointsModule,
-    AuthModule,
-    JwtModule,
+    // AuthModule,
+    // JwtModule,
     DjIntegrationModule
   ],
   controllers: [AppController, VercelWebhookController],
