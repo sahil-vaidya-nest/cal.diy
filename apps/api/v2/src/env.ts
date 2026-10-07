@@ -1,46 +1,53 @@
 import { logLevels } from "@/lib/logger";
 
 import dotenv from "dotenv";
-import fs from "node:fs"
+import fs from "node:fs";
 import path from "node:path";
-// const result = dotenv.config({
-//   path: "C:/Users/India/CAL_DIY_POC/cal.diy/.env",
-// });
 
-// if (result.error) {
-//   throw new Error("Failed to load Cal.diy root .env");
-// }
-
-function findRootEnv(startDir: string): string {
+/**
+ * Local development:
+ *   Find and load the Cal.diy root .env file.
+ *
+ * Production / Render:
+ *   Environment variables are provided directly through process.env,
+ *   so a physical .env file is not required.
+ */
+function findRootEnv(startDir: string): string | null {
   let currentDir = startDir;
- 
+
   while (true) {
     const envPath = path.join(currentDir, ".env");
- 
+
     if (fs.existsSync(envPath)) {
       return envPath;
     }
- 
+
     const parentDir = path.dirname(currentDir);
- 
+
     if (parentDir === currentDir) {
-      throw new Error(
-        `Unable to find Cal.diy root .env starting from: ${startDir}`
-      );
+      return null;
     }
- 
+
     currentDir = parentDir;
   }
 }
- 
+
 const envPath = findRootEnv(process.cwd());
- 
-const result = dotenv.config({
-  path: envPath,
-});
- 
-if (result.error) {
-  throw new Error(`Failed to load Cal.diy root .env from: ${envPath}`);
+
+if (envPath) {
+  const result = dotenv.config({
+    path: envPath,
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to load Cal.diy root .env from: ${envPath}`);
+  }
+} else {
+  // No .env file is expected on hosted environments such as Render.
+  // Configuration will be read directly from process.env.
+  console.log(
+    "No root .env file found. Using environment variables from process.env."
+  );
 }
 export type Environment = {
   NODE_ENV: "development" | "production";
