@@ -17,7 +17,7 @@ import { UrlencodedBodyMiddleware } from "@/middleware/body/urlencoded.body.midd
 import { ResponseInterceptor } from "@/middleware/request-ids/request-id.interceptor";
 import { RequestIdMiddleware } from "@/middleware/request-ids/request-id.middleware";
 import { AuthModule } from "@/modules/auth/auth.module";
-import { EndpointsModule } from "@/modules/endpoints.module";
+// import { EndpointsModule } from "@/modules/endpoints.module";
 import { JwtModule } from "@/modules/jwt/jwt.module";
 import { PrismaModule } from "@/modules/prisma/prisma.module";
 import { RedisModule } from "@/modules/redis/redis.module";
@@ -57,7 +57,7 @@ import { DjIntegrationModule } from "@/modules/dj-integration/dj-integration.mod
       }),
     }),
     PrismaModule,
-    EndpointsModule,
+    // EndpointsModule,
     AuthModule,
     JwtModule,
     DjIntegrationModule
