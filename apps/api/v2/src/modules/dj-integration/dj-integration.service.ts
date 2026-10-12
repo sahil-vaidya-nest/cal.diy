@@ -675,7 +675,7 @@ async createBooking(input: {
     email: string;
   };
 }) {
-  console.log("DJ BOOKING INPUT:", JSON.stringify(input, null, 2));
+
   if (
   !input.attendee ||
   !input.attendee.email ||
@@ -764,6 +764,78 @@ const graphEnd = toLocalDateTime(
   input.end,
   input.timeZone
 );
+
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>"']/g, (char) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+
+    return entities[char] ?? char;
+  });
+
+const isOnline = input.meetingMode === "ONLINE";
+
+const meetingBodyHtml = `
+  <div style="font-family:Arial,Helvetica,sans-serif;color:#26334a;max-width:580px;">
+    <div style="background-color:#182854;padding:24px 28px;">
+      <div style="color:#ffffff;font-size:17px;font-weight:bold;">
+        DJ IMMIGRATION CONSULTING
+      </div>
+      <div style="color:#cbd5e8;font-size:12px;margin-top:6px;">
+        EB-5 Investor Portal
+      </div>
+    </div>
+
+    <div style="padding:24px 28px;border:1px solid #e3e9f1;">
+      <h2 style="font-size:21px;color:#202b42;margin:0 0 14px;">
+        Meeting Details
+      </h2>
+
+      <p style="font-size:14px;line-height:22px;">
+        Your consultation has been scheduled.
+      </p>
+
+      <p style="font-size:14px;">
+        <strong>Meeting Number:</strong>
+        ${escapeHtml(input.meetingNumber)}
+      </p>
+
+      <p style="font-size:14px;">
+        <strong>Meeting Type:</strong>
+        ${escapeHtml(input.title)}
+      </p>
+
+      <p style="font-size:14px;">
+        <strong>Mode:</strong>
+        ${isOnline ? "Online" : "Offline"}
+      </p>
+
+      ${
+        input.description
+          ? `
+            <p style="font-size:14px;">
+              <strong>Agenda:</strong><br>
+              ${escapeHtml(input.description)}
+            </p>
+          `
+          : ""
+      }
+
+      <p style="font-size:12px;color:#64748b;margin-top:22px;">
+        ${
+          isOnline
+            ? "Microsoft Teams joining details are provided below."
+            : "Please refer to your meeting confirmation for location details."
+        }
+      </p>
+    </div>
+  </div>
+`;
   // =====================================================
   // 2. MICROSOFT GRAPH BOOKING
   // =====================================================
@@ -783,8 +855,8 @@ const graphEnd = toLocalDateTime(
           subject: input.title,
  
           body: {
-            contentType: "text",
-            content: input.description ?? "",
+            contentType: "HTML",
+            content: meetingBodyHtml,
           },
  
          start: {
