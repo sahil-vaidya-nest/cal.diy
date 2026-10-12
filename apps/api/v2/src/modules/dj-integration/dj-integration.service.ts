@@ -1401,6 +1401,22 @@ async cancelBooking(input: {
 
   let accessToken: string = key.access_token;
 
+  const cancellationMessage = [
+  "DJ IMMIGRATION CONSULTING",
+  "",
+  "Meeting Cancellation Notice",
+  "",
+  "This meeting has been cancelled.",
+  "",
+  ...(input.reason?.trim()
+    ? [`Reason: ${input.reason.trim()}`, ""]
+    : []),
+  "The meeting will no longer take place at the scheduled time.",
+  "",
+  "For further information, please visit the EB-5 Investor Portal.",
+  "",
+  "DJ Immigration Consulting",
+].join("\n");
   // =====================================================
   // 2. CANCEL EXISTING OUTLOOK EVENT
   // =====================================================
@@ -1419,9 +1435,10 @@ async cancelBooking(input: {
         },
 
         body: JSON.stringify({
-          comment:
-            input.reason?.trim() ||
-            "Meeting cancelled.",
+          // comment:
+          //   input.reason?.trim() ||
+          //   "Meeting cancelled.",
+            comment: cancellationMessage,
         }),
       }
     );
